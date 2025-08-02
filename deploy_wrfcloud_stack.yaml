@@ -21,8 +21,13 @@ Resources:
             Version: "2012-10-17"
             Statement:
               - Effect: Allow
-                Action: "*"
-                Resource: "*"
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:ListBucket
+                Resource:
+                  - !GetAtt WrfCloudBucket.Arn
+                  - !Sub "${WrfCloudBucket.Arn}/*"
   WrfCloudFunction:
     Type: AWS::Lambda::Function
     Properties:
