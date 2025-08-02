@@ -1,0 +1,56 @@
+name: Build & Deploy
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+          cache: 'pip'
+
+      - uses: actions/setup-node@v3
+        with:
+          node-version: '16'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        run: |
+          python -m pip install ./python/src
+          npm --prefix web ci
+          npm --prefix web run build
+
+      - name: Run tests
+        run: python -m pytest
+
+      - name: Package Lambda artifacts
+        run: |
+          mkdir -p artifacts
+          zip -r artifacts/lambda_layer.zip python/src/wrfcloud
+          zip -r artifacts/lambda_function.zip python/src/lambda_wrapper.py python/src/wrfcloud
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Upload artifacts to S3
+        run: |
+          aws s3 cp artifacts/lambda_layer.zip s3://${{ secrets.AWS_ARTIFACT_BUCKET }}/
+          aws s3 cp artifacts/lambda_function.zip s3://${{ secrets.AWS_ARTIFACT_BUCKET }}/
+
+      - name: Deploy CloudFormation stack
+        run: |
+          aws cloudformation deploy \
+            --template-file deploy_wrfcloud_stack.yaml \
+            --stack-name ${{ secrets.APP_STACK_NAME }} \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --no-fail-on-empty-changeset
