@@ -19,6 +19,7 @@ import numpy
 from numpy.ma.core import MaskedArray
 # pylint: disable=E0401
 import pygrib
+from wrfcloud.runtime.opencl_utils import reshape_1d_to_2d
 
 from wrfcloud.jobs.job import WrfLayer, Palette
 from wrfcloud.log import Logger
@@ -54,6 +55,7 @@ class GeoJson:
         self.contour_interval = contour_interval
         self.palette = palette
         self.time_step = 0
+        self.dt = 0
 
     def convert(self, out_file: Union[str, None]) -> Union[None, dict]:
         """
@@ -129,30 +131,33 @@ class GeoJson:
         Read the variable data, latitude, and longitude grids from a GRIB2 file
         :return: data, latitude, longitude
         """
-        # read grib2 file with pygrib & eccodes
         wrf = pygrib.open(self.wrf_file)  # pylint: disable=E1101
 
-        # determine if we are after a 2D or 3D field
-        grid = self._read_2d_from_grib(wrf) if self.z_level is None else self._read_3d_from_grib(wrf)
-
-        # get the latitude and longitude grids
-        grid_lat = MaskedArray(wrf.select(shortName='nlat')[0].values)
-        grid_lon = MaskedArray(wrf.select(shortName='elon')[0].values) - 360
+        if self.z_level is None:
+            grid, grid_lat, grid_lon = self._read_2d_from_grib(wrf)
+        else:
+            grid = self._read_3d_from_grib(wrf)
+            grid_lat = MaskedArray(wrf.select(shortName='nlat')[0].values)
+            grid_lon = MaskedArray(wrf.select(shortName='elon')[0].values) - 360
 
         return grid, grid_lat, grid_lon
 
-    def _read_2d_from_grib(self, wrf: any) -> MaskedArray:
+    def _read_2d_from_grib(self, wrf: any) -> (MaskedArray, MaskedArray, MaskedArray):
         """
         Read the 2D variable data from a GRIB2 file
         :param wrf: pygrib.open object to read the GRIB2 file
-        :return: data
+        :return: data, latitude, longitude
         """
-        # read grib2 file with pygrib & eccodes
+        grid_lat = MaskedArray(wrf.select(shortName='nlat')[0].values)
+        grid_lon = MaskedArray(wrf.select(shortName='elon')[0].values) - 360
         variable = wrf.select(shortName=self.variable)
-        # TODO: self.layer.dt = variable[0].validDate
-        grid = MaskedArray(variable[0].values)
+        self.dt = int(variable[0].validDate.timestamp())
+        values = variable[0].values
+        if values.ndim == 1:
+            values = reshape_1d_to_2d(values, grid_lat.shape[1], grid_lat.shape[0])
+        grid = MaskedArray(values)
 
-        return grid
+        return grid, grid_lat, grid_lon
 
     def _read_3d_from_grib(self, wrf: any) -> MaskedArray:
         """
@@ -165,21 +170,6 @@ class GeoJson:
         grid = MaskedArray(variable[0].values)
 
         return grid
-
-    @staticmethod
-    def _1d_to_2d(data: MaskedArray, x: int, y: int) -> MaskedArray:
-        """
-        Convert a 1D array to a 2D grid
-        :param data: Data array to convert
-        :param x: X dimension
-        :param y: Y dimension
-        :return: 2D grid
-        """
-        data2d = []
-        for i in range(0, x*y, x):
-            data2d.append(data[i:i+x])
-
-        return MaskedArray(data2d, ndmin=2)
 
     def _grid_to_lonlat(self, x: float, y: float) -> (float, float):
         """
